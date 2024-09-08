@@ -467,6 +467,16 @@ static QSVFrame *submit_frame(QSVVPPContext *s, AVFilterLink *inlink, AVFrame *p
     else if (qsv_frame->frame->repeat_pict == 4)
         qsv_frame->surface.Info.PicStruct |= MFX_PICSTRUCT_FRAME_TRIPLING;
 
+    // if crop arguments are not present from the vpp_qsv filter, use the provided AVFrame
+    // crop_* members instead.
+    if (!qsv_frame->surface.Info.CropX && !qsv_frame->surface.Info.CropY
+        && qsv_frame->surface.Info.CropW == picref->width && qsv_frame->surface.Info.CropH == picref->height) {
+        qsv_frame->surface.Info.CropW = (mfxU16)((picref->width - picref->crop_right) - picref->crop_left);
+        qsv_frame->surface.Info.CropH = (mfxU16)((picref->height - picref->crop_bottom) - picref->crop_top);
+        qsv_frame->surface.Info.CropX = (mfxU16)picref->crop_left;
+        qsv_frame->surface.Info.CropY = (mfxU16)picref->crop_top;
+    }
+
     return qsv_frame;
 }
 
