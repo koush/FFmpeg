@@ -33,8 +33,6 @@ typedef struct ScaleVtContext {
     AVClass *class;
 
     VTPixelTransferSessionRef transfer;
-    int output_width;
-    int output_height;
     char *w_expr;
     char *h_expr;
 
@@ -232,15 +230,18 @@ static int scale_vt_config_output(AVFilterLink *outlink)
     FilterLink        *inl = ff_filter_link(inlink);
     AVHWFramesContext *hw_frame_ctx_in;
     AVHWFramesContext *hw_frame_ctx_out;
+    int w, h;
 
     err = ff_scale_eval_dimensions(s, s->w_expr, s->h_expr, inlink, outlink,
-                                   &s->output_width,
-                                   &s->output_height);
+                                   &w,
+                                   &h);
     if (err < 0)
         return err;
 
-    outlink->w = s->output_width;
-    outlink->h = s->output_height;
+    ff_scale_adjust_dimensions(inlink, &w, &h, 0, 1);
+
+    outlink->w = w;
+    outlink->h = h;
 
     if (inlink->sample_aspect_ratio.num) {
         AVRational r = {outlink->h * inlink->w, outlink->w * inlink->h};
