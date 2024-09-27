@@ -49,16 +49,9 @@ typedef struct ProgramOpenCLContext {
     AVRational          source_rate;
 } ProgramOpenCLContext;
 
-static int program_opencl_load(AVFilterContext *avctx)
-{
-    ProgramOpenCLContext *ctx = avctx->priv;
+static int program_opencl_loaded(AVFilterContext *avctx) {
     cl_int cle;
-    int err;
-
-    err = ff_opencl_filter_load_program_from_file(avctx, ctx->source_file);
-    if (err < 0)
-        return err;
-
+    ProgramOpenCLContext *ctx = avctx->priv;
     ctx->command_queue = clCreateCommandQueue(ctx->ocf.hwctx->context,
                                               ctx->ocf.hwctx->device_id,
                                               0, &cle);
@@ -81,6 +74,27 @@ static int program_opencl_load(AVFilterContext *avctx)
 
     ctx->loaded = 1;
     return 0;
+}
+
+static int program_opencl_load(AVFilterContext *avctx)
+{
+    ProgramOpenCLContext *ctx = avctx->priv;
+    int err;
+
+    err = ff_opencl_filter_load_program_from_file(avctx, ctx->source_file);
+    if (err < 0)
+        return err;
+    return program_opencl_loaded(avctx);
+}
+
+static int program_opencl_load_source(AVFilterContext *avctx, const char *src_const)
+{
+    int err;
+
+    err = ff_opencl_filter_load_program(avctx, &src_const, 1);
+    if (err < 0)
+        return err;
+    return program_opencl_loaded(avctx);
 }
 
 static int program_opencl_run(AVFilterContext *avctx)
@@ -330,6 +344,22 @@ static av_cold void program_opencl_uninit(AVFilterContext *avctx)
 
 #if CONFIG_PROGRAM_OPENCL_FILTER
 
+
+static int process_command(AVFilterContext *ctx, const char *cmd, const char *args,
+                           char *res, int res_len, int flags) {
+    int ret;
+
+    if (!strcmp(cmd, "source")) {
+        ret = program_opencl_load_source(ctx, args);
+    } else
+        ret = AVERROR(ENOSYS);
+
+    if (ret < 0)
+        av_log(ctx, AV_LOG_ERROR, "Failed to process command. Continuing with existing parameters.\n");
+
+    return ret;
+}
+
 static const AVOption program_opencl_options[] = {
     { "source", "OpenCL program source file", OFFSET(source_file),
       AV_OPT_TYPE_STRING, { .str = NULL }, .flags = FLAGS },
@@ -372,6 +402,7 @@ const AVFilter ff_vf_program_opencl = {
     FILTER_OUTPUTS(program_opencl_outputs),
     FILTER_SINGLE_PIXFMT(AV_PIX_FMT_OPENCL),
     .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
+    .process_command = process_command,
 };
 
 #endif
