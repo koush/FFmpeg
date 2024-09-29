@@ -47,6 +47,8 @@ typedef struct ProgramOpenCLContext {
     int                 width, height;
     enum AVPixelFormat  source_format;
     AVRational          source_rate;
+
+    int                 planar;
 } ProgramOpenCLContext;
 
 static int program_opencl_loaded(AVFilterContext *avctx) {
@@ -106,6 +108,7 @@ static int program_opencl_run(AVFilterContext *avctx)
     size_t global_work[2];
     cl_mem src, dst;
     int err, input, plane;
+    int planar_offset = 0;
 
     if (!ctx->loaded) {
         err = program_opencl_load(avctx);
@@ -119,22 +122,73 @@ static int program_opencl_run(AVFilterContext *avctx)
         goto fail;
     }
 
-    for (plane = 0; plane < FF_ARRAY_ELEMS(output->data); plane++) {
-        dst = (cl_mem)output->data[plane];
-        if (!dst)
-            break;
+    if (ctx->planar) {
+        for (plane = 0; plane < FF_ARRAY_ELEMS(output->data); plane++) {
+            dst = (cl_mem)output->data[plane];
+            if (!dst)
+                break;
 
+            cle = clSetKernelArg(ctx->kernel, 0, sizeof(cl_mem), &dst);
+            if (cle != CL_SUCCESS) {
+                av_log(avctx, AV_LOG_ERROR, "Failed to set kernel "
+                    "destination image argument: %d.\n", cle);
+                err = AVERROR_UNKNOWN;
+                goto fail;
+            }
+            cle = clSetKernelArg(ctx->kernel, 1, sizeof(cl_uint), &ctx->index);
+            if (cle != CL_SUCCESS) {
+                av_log(avctx, AV_LOG_ERROR, "Failed to set kernel "
+                    "index argument: %d.\n", cle);
+                err = AVERROR_UNKNOWN;
+                goto fail;
+            }
+
+            for (input = 0; input < ctx->nb_inputs; input++) {
+                av_assert0(ctx->frames[input]);
+
+                src = (cl_mem)ctx->frames[input]->data[plane];
+                av_assert0(src);
+
+                cle = clSetKernelArg(ctx->kernel, 2 + input, sizeof(cl_mem), &src);
+                if (cle != CL_SUCCESS) {
+                    av_log(avctx, AV_LOG_ERROR, "Failed to set kernel "
+                        "source image argument %d: %d.\n", input, cle);
+                    err = AVERROR_UNKNOWN;
+                    goto fail;
+                }
+            }
+
+            err = ff_opencl_filter_work_size_from_image(avctx, global_work,
+                                                        output, plane, 0);
+            if (err < 0)
+                goto fail;
+
+            av_log(avctx, AV_LOG_DEBUG, "Run kernel on plane %d "
+                "(%"SIZE_SPECIFIER"x%"SIZE_SPECIFIER").\n",
+                plane, global_work[0], global_work[1]);
+
+            cle = clEnqueueNDRangeKernel(ctx->command_queue, ctx->kernel, 2, NULL,
+                                        global_work, NULL, 0, NULL, NULL);
+            CL_FAIL_ON_ERROR(AVERROR(EIO), "Failed to enqueue kernel: %d.\n", cle);
+        }
+    }
+    else {
+        for (plane = 0; plane < FF_ARRAY_ELEMS(output->data); plane++) {
+            dst = (cl_mem)output->data[plane];
+            if (!dst)
+                break;
+            if (plane) {
+                av_log(avctx, AV_LOG_ERROR, "Kernel requires multiplanar output, "
+                    "but planar option is unset.\n");
+                return AVERROR(EINVAL);
+            }
+        }
+
+        dst = (cl_mem)output->data[0];
         cle = clSetKernelArg(ctx->kernel, 0, sizeof(cl_mem), &dst);
         if (cle != CL_SUCCESS) {
             av_log(avctx, AV_LOG_ERROR, "Failed to set kernel "
-                   "destination image argument: %d.\n", cle);
-            err = AVERROR_UNKNOWN;
-            goto fail;
-        }
-        cle = clSetKernelArg(ctx->kernel, 1, sizeof(cl_uint), &ctx->index);
-        if (cle != CL_SUCCESS) {
-            av_log(avctx, AV_LOG_ERROR, "Failed to set kernel "
-                   "index argument: %d.\n", cle);
+                "destination image argument: %d.\n", cle);
             err = AVERROR_UNKNOWN;
             goto fail;
         }
@@ -142,26 +196,29 @@ static int program_opencl_run(AVFilterContext *avctx)
         for (input = 0; input < ctx->nb_inputs; input++) {
             av_assert0(ctx->frames[input]);
 
-            src = (cl_mem)ctx->frames[input]->data[plane];
-            av_assert0(src);
+            for (plane = 0; plane < FF_ARRAY_ELEMS(output->data); plane++, planar_offset++) {
+                src = (cl_mem)ctx->frames[input]->data[plane];
+                if (!src)
+                    break;
 
-            cle = clSetKernelArg(ctx->kernel, 2 + input, sizeof(cl_mem), &src);
-            if (cle != CL_SUCCESS) {
-                av_log(avctx, AV_LOG_ERROR, "Failed to set kernel "
-                       "source image argument %d: %d.\n", input, cle);
-                err = AVERROR_UNKNOWN;
-                goto fail;
+                cle = clSetKernelArg(ctx->kernel, 1 + planar_offset, sizeof(cl_mem), &src);
+                if (cle != CL_SUCCESS) {
+                    av_log(avctx, AV_LOG_ERROR, "Failed to set kernel "
+                        "source image argument %d plane %d: %d.\n", input, plane, cle);
+                    err = AVERROR_UNKNOWN;
+                    goto fail;
+                }
             }
         }
 
         err = ff_opencl_filter_work_size_from_image(avctx, global_work,
-                                                    output, plane, 0);
+                                                    output, 0, 0);
         if (err < 0)
             goto fail;
 
-        av_log(avctx, AV_LOG_DEBUG, "Run kernel on plane %d "
-               "(%"SIZE_SPECIFIER"x%"SIZE_SPECIFIER").\n",
-               plane, global_work[0], global_work[1]);
+        av_log(avctx, AV_LOG_DEBUG, "Run kernel on all planes "
+            "(%"SIZE_SPECIFIER"x%"SIZE_SPECIFIER").\n",
+            global_work[0], global_work[1]);
 
         cle = clEnqueueNDRangeKernel(ctx->command_queue, ctx->kernel, 2, NULL,
                                      global_work, NULL, 0, NULL, NULL);
@@ -306,6 +363,8 @@ static av_cold int program_opencl_init(AVFilterContext *avctx)
             if (err < 0)
                 return err;
         }
+
+        ctx->ocf.output_format = ctx->source_format;
     }
 
     return 0;
@@ -373,6 +432,12 @@ static const AVOption program_opencl_options[] = {
       AV_OPT_TYPE_IMAGE_SIZE,       { .str = NULL }, 0, 0, FLAGS },
     { "s",      "Video size",       OFFSET(width),
       AV_OPT_TYPE_IMAGE_SIZE,       { .str = NULL }, 0, 0, FLAGS },
+
+    { "format", "Pixel format for output framebuffer",
+      OFFSET(source_format), AV_OPT_TYPE_PIXEL_FMT,
+      { .i64 = AV_PIX_FMT_NONE }, -1, INT32_MAX, FLAGS },
+
+    {"planar",  "Kernel will run once per plane or receive all planes as multiple inputs", OFFSET(planar), AV_OPT_TYPE_BOOL, {.i64=1}, 0, 1 },
 
     { NULL },
 };
