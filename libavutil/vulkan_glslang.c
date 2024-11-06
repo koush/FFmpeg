@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <pthread.h>
+#include "thread.h"
 
 #include <glslang/build_info.h>
 #include <glslang/Include/glslang_c_interface.h>
