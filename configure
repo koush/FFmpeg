@@ -6914,6 +6914,7 @@ enabled libharfbuzz       && require_pkg_config libharfbuzz harfbuzz hb.h hb_buf
 enabled libglslang && { check_lib spirv_compiler glslang/Include/glslang_c_interface.h glslang_initialize_process \
                             -lglslang -lMachineIndependent -lGenericCodeGen \
                             -lSPVRemapper -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lpthread -lstdc++ -lm ||
+                        check_pkg_config spirv_compiler glslang "glslang/Include/glslang_c_interface.h glslang/build_info.h" glslang_initialize_process ||
                         require spirv_compiler glslang/Include/glslang_c_interface.h glslang_initialize_process \
                             -lglslang -lMachineIndependent -lOSDependent -lHLSL -lOGLCompiler -lGenericCodeGen \
                             -lSPVRemapper -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lpthread -lstdc++ -lm ; }
