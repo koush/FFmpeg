@@ -184,6 +184,7 @@ static int aac_parse_packet(AVFormatContext *ctx, PayloadContext *data,
                             int flags)
 {
     int ret;
+    AVCodecParameters *par = st->codecpar;
 
 
     if (!buf) {
@@ -210,6 +211,26 @@ static int aac_parse_packet(AVFormatContext *ctx, PayloadContext *data,
         }
 
         return 1;
+    }
+
+    /* Check for and skip ADTS header if we have an explicit decoder config */
+    if (par->extradata && len > 7) {
+    	if (buf[0] == 0xff && (buf[1] & 0xf0) == 0xf0) {
+    	    size_t header_size = 7 + ((buf[1] & 0x01) ? 0 : 2);
+    	    if (len > header_size) {
+                buf += header_size;
+                len -= header_size;
+    	    }
+
+    	    if ((ret = av_new_packet(pkt, len)) < 0) {
+                av_log(ctx, AV_LOG_ERROR, "Out of memory\n");
+                return ret;
+    	    }
+
+            memcpy(pkt->data, buf, len);
+    	    pkt->stream_index = st->index;
+    	    return 0;
+    	}
     }
 
     if (rtp_parse_mp4_au(data, buf, len)) {
